@@ -13,7 +13,12 @@ No outside data and no hand-picked names: the snapshot prices its own protocols.
 1. For every category, collect the live-token protocols and compute `market_cap / TVL`.
 2. Winsorise those ratios to [0.03, 2.0] (the raw file contains a 400x prediction-market print
    that would otherwise poison its category), take the median, and shrink it toward the
-   market-wide median (0.21x) with weight `n / (n + 6)` by peer count.
+   market-wide median (0.21x) with weight `n / (n + 6)` by peer count. On top of shrinkage, a
+   small-sample confidence cap binds thin categories: at most 1.5x the global median with
+   1 live peer, 2.5x with 2 peers, 4x with 3–4 peers, 6x with 5+. One observation is a hint,
+   not a pricing regime — without the cap, the single-peer Risk Curators category (whose one
+   peer prints at the winsor cap) put three curators on top of the board; curator TVL is also
+   client assets under curation, not locked value, which is a structural reason for caution.
 3. Price each pre-token protocol as `TVL x category multiple`, adjusted by clamped 7-day TVL
    momentum, track record without a token (age, up to 3 years), chain breadth, log-scale size,
    and a disclosed x1.10 confidence tilt for watchlist protocols.

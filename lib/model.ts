@@ -22,9 +22,29 @@
 // contains extreme prints (a prediction market at 400x TVL, a token locker at 19x) that would
 // otherwise poison a whole category. A category median is then shrunk toward the global median
 // with weight n / (n + SHRINK_K), SHRINK_K = 6: a category with fifteen live peers mostly speaks
-// for itself, while a category with a single peer (Risk Curators, whose one live peer prints near
-// the 2.0 cap) is pulled most of the way back to the market-wide 0.22x — one observation is a
-// hint, not a pricing regime. Categories with no live peer at all fall back to the global median.
+// for itself, while a category with a single peer is pulled most of the way back to the
+// market-wide 0.21x. Categories with no live peer at all fall back to the global median.
+//
+// Shrinkage alone was not enough for thin categories (found in review of the first board):
+// Risk Curators has exactly one live peer, printing at the 2.0 winsor cap, and even after
+// shrinkage its multiple stayed at 0.47x — more than double the market-wide figure on the
+// strength of a single observation — which put three curators on top of the board. So a second,
+// harder guard applies after shrinkage: a confidence cap tied to the peer count, expressed as a
+// multiple of the global median G. A category with 1 peer may not exceed 1.5 x G, with 2 peers
+// 2.5 x G, with 3-4 peers 4 x G, and with 5 or more peers 6 x G (at which point the winsor cap
+// is the binding limit anyway). The logic is sampling logic, not taste: the standard error of a
+// median falls with n, so the burden of proof a category must meet to price far above the whole
+// market rises with its evidence. The same rule, applied blind to every category, also trims
+// Derivatives (2 peers, raw median 1.69x) and the other single-peer categories whose only peer
+// prints at the cap (Chain, Prediction Market); thin categories whose peers print low
+// (Restaking, Staking Pool, Liquidity Manager) sit under their caps and are untouched.
+//
+// Curator and allocator categories (Risk Curators, Onchain Capital Allocator) deserve the
+// conservative treatment for a structural reason as well: their TVL is client assets under
+// curation — money that belongs to depositors and can leave with them — not value the protocol
+// itself has locked in, so a market-cap/TVL ratio observed on a tokenised peer overstates what
+// the same TVL would support for a curator's own token. That is stated here as the reason the
+// generic small-sample cap is the right tool for them, not as an extra hand-set discount.
 //
 // Who is ranked: every protocol that records no token (mcap, gecko id and symbol all null) and is
 // a standalone product that could plausibly launch one. Following the snapshot's own watchlist
@@ -63,6 +83,10 @@ export interface ModelConstants {
   ratio_floor: number;
   ratio_cap: number;
   shrink_k: number;
+  cap_factor_1_peer: number;
+  cap_factor_2_peers: number;
+  cap_factor_3_4_peers: number;
+  cap_factor_5plus_peers: number;
   growth_floor_pct: number;
   growth_cap_pct: number;
   growth_weight: number;
@@ -82,6 +106,10 @@ export const MODEL: ModelConstants = {
   ratio_floor: 0.03,
   ratio_cap: 2.0,
   shrink_k: 6,
+  cap_factor_1_peer: 1.5,
+  cap_factor_2_peers: 2.5,
+  cap_factor_3_4_peers: 4,
+  cap_factor_5plus_peers: 6,
   growth_floor_pct: -30,
   growth_cap_pct: 60,
   growth_weight: 0.6,
@@ -97,7 +125,7 @@ export const MODEL: ModelConstants = {
   watchlist_mult: 1.1,
 };
 
-export const MODEL_VERSION = 'radar-2 category-relative';
+export const MODEL_VERSION = 'radar-2.1 category-relative, small-sample capped';
 
 /** How many live-token protocols the dashboard's Live view carries, by market cap. */
 export const LIVE_ROWS = 30;
@@ -122,6 +150,8 @@ export interface BoardRow {
   model: {
     category_multiple: number;
     category_peers: number;
+    category_cap: number;
+    category_capped: boolean;
     growth_multiplier: number;
     age_multiplier: number;
     breadth_multiplier: number;
@@ -151,6 +181,9 @@ export interface CategoryStat {
   category: string;
   peers: number;
   raw_median: number;
+  shrunk_multiple: number;
+  cap: number;
+  capped: boolean;
   multiple: number;
 }
 
@@ -220,9 +253,18 @@ function median(sorted: number[]): number {
 
 const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
 
+/** The confidence cap for a category with `peers` live peers, as a factor of the global median. */
+export function capFactorFor(peers: number, model: ModelConstants = MODEL): number {
+  if (peers <= 1) return model.cap_factor_1_peer;
+  if (peers === 2) return model.cap_factor_2_peers;
+  if (peers <= 4) return model.cap_factor_3_4_peers;
+  return model.cap_factor_5plus_peers;
+}
+
 /**
  * The peer evidence: for every category, the winsorised median market-cap/TVL of its live-token
- * protocols, shrunk toward the global median by peer count. Deterministic in the snapshot alone.
+ * protocols, shrunk toward the global median by peer count, then held under the small-sample
+ * confidence cap for its peer count. Deterministic in the snapshot alone.
  */
 export function categoryMultiples(snapshot: Snapshot, model: ModelConstants = MODEL): { global: number; byCategory: Map<string, CategoryStat> } {
   const winsor = (r: number): number => clamp(r, model.ratio_floor, model.ratio_cap);
@@ -240,7 +282,17 @@ export function categoryMultiples(snapshot: Snapshot, model: ModelConstants = MO
     ratios.sort((a, b) => a - b);
     const raw = median(ratios);
     const shrunk = (ratios.length * raw + model.shrink_k * globalMedian) / (ratios.length + model.shrink_k);
-    byCategory.set(category, { category, peers: ratios.length, raw_median: round4(raw), multiple: round4(shrunk) });
+    const cap = capFactorFor(ratios.length, model) * globalMedian;
+    const capped = shrunk > cap;
+    byCategory.set(category, {
+      category,
+      peers: ratios.length,
+      raw_median: round4(raw),
+      shrunk_multiple: round4(shrunk),
+      cap: round4(cap),
+      capped,
+      multiple: round4(Math.min(shrunk, cap)),
+    });
   }
   return { global: round4(globalMedian), byCategory };
 }
@@ -256,6 +308,8 @@ export function scoreProtocol(
   const stat = multiples.byCategory.get(p.category ?? 'Other');
   const categoryMultiple = stat ? stat.multiple : multiples.global;
   const peers = stat ? stat.peers : 0;
+  const categoryCap = stat ? stat.cap : round4(capFactorFor(0, model) * multiples.global);
+  const categoryCapped = stat ? stat.capped : false;
 
   const growthPct = clamp(p.change_7d ?? 0, model.growth_floor_pct, model.growth_cap_pct);
   const growthMult = 1 + (growthPct / 100) * model.growth_weight;
@@ -281,6 +335,8 @@ export function scoreProtocol(
     parts: {
       category_multiple: categoryMultiple,
       category_peers: peers,
+      category_cap: categoryCap,
+      category_capped: categoryCapped,
       growth_multiplier: round4(growthMult),
       age_multiplier: round4(ageMult),
       breadth_multiplier: round4(breadthMult),
