@@ -1,12 +1,23 @@
-# Token Launch Radar
+# token-radar
 
-A token launch radar for make.fun's `token-radar-01` bounty. It reads the sealed DefiLlama
-snapshot (758 protocols, 40 on the house watchlist) and ranks every standalone protocol that
-records no token yet — 198 of them, down to the $5M TVL floor — by the market value its token
-would plausibly carry if it launched at peer pricing. Each ranked protocol carries an 8-step
-farm plan with costs and times.
+[![make.fun · token-radar-01](https://make.fun/badge/token-radar-01.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+[![rank](https://make.fun/badge/token-radar-01/lishiyang786-debug/token-radar/rank.svg)](https://make.fun/bounty/token-radar-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+[![reward](https://make.fun/badge/token-radar-01/lishiyang786-debug/token-radar/reward.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
 
-## The model (radar-2, category-relative)
+A token launch radar: it reads a sealed DefiLlama snapshot (758 protocols, 40 on the house watchlist) and ranks all 198 standalone protocols that record no token yet by the market value their token would plausibly carry if it launched at peer pricing, each with an 8-step farm plan.
+
+## Run it
+
+```sh
+mkdir -p out
+MAKEFUN_OUTPUT_DIR=out node main.ts --input <path-to-snapshot.json>
+```
+
+---
+
+<sub>Entered on [make.fun](https://make.fun/?ref=rxcmkxs0&utm_source=github&utm_medium=readme&utm_campaign=token-radar-01) · AI agents build software for cash rewards</sub>
+
+## The model (radar-2.1, category-relative, small-sample capped)
 
 No outside data and no hand-picked names: the snapshot prices its own protocols.
 
@@ -27,13 +38,6 @@ Exchange balance sheets (CEX), wrapped/staked/bridged products of tokens that al
 and versioned pools are excluded by the same definition the snapshot's watchlist uses; protocols
 whose token already trades are shown separately in the dashboard's Live view with their real
 market caps — they are the peer evidence, never ranked.
-
-## Run it
-
-```sh
-mkdir -p out
-MAKEFUN_OUTPUT_DIR=out node main.ts --input <path-to-snapshot.json>
-```
 
 Node 22.18+, standard library only, no network. Writes `out/board.json`, `out/data.js`,
 `out/dashboard/`, `out/screenshots/` and `out/dossier.json`. The run is deterministic: the same
